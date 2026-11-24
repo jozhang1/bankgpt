@@ -87,8 +87,12 @@ class SemanticQueryMatcher:
         relative = bool(re.search(r'\b(?:last|previous|this) year\b', text))
         provider = (re.search(r'\b(?:from|by) (.+?)(?=\s+(?:in|for|during)\b|$)', text)
                     if attrs.intersection({'recognition_count', 'ranking_position'}) else None)
-        reference_value = as_of or reference_date or date.today().isoformat()
+        # "Current" is the selected snapshot's date, never the wall clock.
+        reference_value = as_of or reference_date or (
+            snapshot.taken_on if snapshot is not None else None)
         if relative:
+            if reference_value is None:
+                return None
             reference = date.fromisoformat(str(reference_value))
             years.add(str(reference.year - (0 if 'this year' in text else 1)))
         if len(years) > 1:

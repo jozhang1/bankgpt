@@ -8,25 +8,26 @@ from contract import Page
 
 class KnowledgeIntegrationTests(unittest.TestCase):
 
-    def test_missing_semantic_fact_uses_evidence_fallback_only_for_semantic_query(self):
+    def test_missing_fact_falls_back_to_evidence_only_when_evidence_exists(self):
         knowledge = Knowledge()
         selection = AnswerSelection('fact', matches=())
         hits = (object(),)
         with patch.object(knowledge.answer_selector, 'retrieve', return_value=hits), \
              patch.object(knowledge.answer_selector, '_scope_evidence', return_value=hits), \
              patch.object(knowledge, '_render_retrieved_route', return_value='evidence answer') as render:
-            with patch.object(knowledge.fact_selector.semantic, 'attributes', return_value={'employee_count'}):
-                self.assertEqual(
-                    knowledge._render_fact_route(selection, 'VTO users last year?', None),
-                    'evidence answer',
-                )
+            self.assertEqual(
+                knowledge._render_fact_route(selection, 'VTO users last year?', None),
+                'evidence answer',
+            )
             self.assertEqual(render.call_count, 1)
-            with patch.object(knowledge.fact_selector.semantic, 'attributes', return_value=set()):
-                self.assertIn(
-                    'couldn’t find information',
-                    knowledge._render_fact_route(selection, 'Unpublished loan rate?', None).text,
-                )
-            self.assertEqual(render.call_count, 1)
+        with patch.object(knowledge.answer_selector, 'retrieve', return_value=()), \
+             patch.object(knowledge.answer_selector, '_scope_evidence', return_value=()), \
+             patch.object(knowledge, '_render_retrieved_route') as render:
+            self.assertIn(
+                'couldn’t find information',
+                knowledge._render_fact_route(selection, 'Unpublished loan rate?', None).text,
+            )
+            render.assert_not_called()
 
 
     def test_ingest_and_conflicts_use_the_harness_module_identity(self):
@@ -77,13 +78,15 @@ class KnowledgeIntegrationTests(unittest.TestCase):
                       '# Auto Loans\n\n| Term | APR |\n| --- | --- |\n| 60 Months | ' + value + ' |',
                       '2026-05-12T00:00:00Z') for i, value in enumerate(('5.39%', '6.25%'))]
         knowledge.ingest(Snapshot('may', '2026-05-12', pages))
-        answer = knowledge.answer('APR for a 60-month auto loan?')
-        self.assertNotIn('5.39%', answer.text)
-        self.assertNotIn('6.25%', answer.text)
-        self.assertIn('unable to determine a single applicable value', answer.text)
-        self.assertIn('[ambiguous]', answer.text)
-        self.assertFalse(answer.confident)
-        self.assertIsNotNone(answer.conflict_note)
-        self.assertEqual(len(answer.sources), 2)
-
+        # Two undated pages disagree, so no value is admitted by the fact
+        # route; the answer falls back to evidence instead of picking a side.
+        hits = (object(),)
+        with patch.object(knowledge.answer_selector, 'retrieve', return_value=hits), \
+             patch.object(knowledge.answer_selector, '_scope_evidence', return_value=hits), \
+             patch.object(type(knowledge), '_render_retrieved_route',
+                          return_value='evidence answer') as render:
+            answer = knowledge.answer('APR for a 60-month auto loan?')
+        self.assertEqual(answer, 'evidence answer')
+        self.assertEqual(render.call_count, 1)
+        self.assertEqual(len(knowledge.processor.store.observations), 2)
 

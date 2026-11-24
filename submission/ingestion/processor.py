@@ -14,6 +14,7 @@ import re
 import sys
 from time import monotonic
 
+from ingestion.rate_lines import rate_lines_to_tables
 from ingestion.cleaner import PageCleaner
 from ingestion.chunker import Block, Chunk, EvidenceChunker
 from ingestion.metadata_extractor import DocumentMetadata, MetadataExtractor
@@ -193,7 +194,7 @@ class KnowledgeProcessor:
         calls_before = dict(self.model_call_counts)
         evidence_records: list[Evidence] = []
         for page in snapshot.pages:
-            cleaned = self.cleaner.clean(page.markdown)
+            cleaned = rate_lines_to_tables(self.cleaner.clean(page.markdown))
             source_type = self._classify_source_type(page.title, cleaned)
             blocks = self.chunker.parse_blocks(cleaned)
             metadata = self.metadata_extractor.extract(

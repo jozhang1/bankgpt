@@ -4,6 +4,9 @@ from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 from itertools import combinations, product
 import json
+import logging
+import os
+import re
 from types import SimpleNamespace
 
 from contract import Conflict, Source
@@ -14,8 +17,27 @@ from foundation.entities import entity_label
 from foundation.products import PRODUCTS
 from foundation.store import KnowledgeStore
 
+logger = logging.getLogger(__name__)
+
+
+def _report_version_changes() -> bool:
+    """Report explicitly dated version changes of one Fact as conflicts.
+
+    On by default; set BANKGPT_REPORT_VERSION_CHANGES=0 to restore the older
+    behaviour of leaving them out, so the two can be compared on real data.
+    """
+    return os.environ.get('BANKGPT_REPORT_VERSION_CHANGES', '1').strip() != '0'
+
+
 _NON_CONFLICT_ATTRIBUTES = frozenset({'application_url', 'rates_url'})
-_SOURCE_AUTHORITY = {'calculator': 1, 'official_rate_table': 2}
+_AUTHORITY_RATE_TABLE = 3
+# Lower rank = less authoritative for a current rate/fee. Narrative pages
+# (news, blog, press releases, PDFs) describe offers at one point in time and are
+# routinely left online after the rate moved; calculators are derived.
+_AUTHORITY_LABEL = {0: 'narrative page', 1: 'calculator', _AUTHORITY_RATE_TABLE: 'official_rate_table'}
+_NARRATIVE_URL = re.compile(
+    r'(?:^|[/_-])(?:news|newsroom|blog|press|press-release|article|articles|stories|story|archive|archives)(?:[/_.-]|$)'
+    r'|\.pdf(?:$|[?#])', re.I)
 
 
 class ConflictDetector:
@@ -90,7 +112,9 @@ class ConflictDetector:
         for obs in (a, b):
             if (obs.effective_from is not None and obs.effective_to is not None
                     and obs.effective_from > obs.effective_to):
-                raise ValueError('Invalid effective date interval')
+                # One malformed interval must not abort the whole report; treat
+                # its temporal relation as unknown (reported as uncertain).
+                return 'unknown'
         if ((a.effective_to is not None and b.effective_from is not None
              and a.effective_to < b.effective_from)
                 or (b.effective_to is not None and a.effective_from is not None
@@ -196,6 +220,19 @@ class ConflictDetector:
         )
         return value, winners, reason
 
+    @staticmethod
+    def _authority(evidence):
+        """Authority rank of a source for a current value; None when unknown."""
+        # Narrative pages are checked first: a press release or PDF that happens
+        # to contain a rate table is still a dated description, not the schedule.
+        if _NARRATIVE_URL.search(evidence.source_url or ''):
+            return 0
+        if evidence.source_type == 'calculator':
+            return 1
+        if evidence.source_type == 'official_rate_table':
+            return _AUTHORITY_RATE_TABLE
+        return None
+
     def _latest_snapshot_resolution(self, fact_ids, observations):
         """Choose a winner only if the latest full-site snapshot supports it.
 
@@ -233,46 +270,48 @@ class ConflictDetector:
             if effective_value is not None:
                 return effective_value, effective_winners, effective_reason
 
-            typed = [
-                (observation,
-                 self.store.evidence[observation.evidence_id].source_type)
+            ranked = [
+                (observation, self._authority(self.store.evidence[observation.evidence_id]))
                 for observation in latest_observations
             ]
-            if typed and all(source_type in _SOURCE_AUTHORITY for _, source_type in typed):
-                highest = max(_SOURCE_AUTHORITY[source_type]
-                              for _, source_type in typed)
-                preferred = tuple(
-                    observation for observation, source_type in typed
-                    if _SOURCE_AUTHORITY[source_type] == highest
-                )
-                lower = tuple(
-                    observation for observation, source_type in typed
-                    if _SOURCE_AUTHORITY[source_type] < highest
-                )
+            known = [(observation, rank) for observation, rank in ranked
+                     if rank is not None]
+            if len({rank for _, rank in known}) >= 2:
+                highest = max(rank for _, rank in known)
+                preferred = tuple(observation for observation, rank in known
+                                  if rank == highest)
                 preferred_value = preferred[0]
+                # Every observation that disagrees with the preferred value must
+                # be a source we positively know to be lower-authority. An
+                # unranked source that disagrees keeps the conflict unresolved;
+                # an unranked source that agrees is harmless.
+                lower = tuple(
+                    observation for observation, rank in ranked
+                    if self._value_relation(preferred_value, observation) != 'equal'
+                )
+                rank_of = {observation.id: rank for observation, rank in ranked}
                 if (lower
                         and all(self._value_relation(preferred_value, other) == 'equal'
                                 for other in preferred[1:])
-                        and any(self._value_relation(preferred_value, other) != 'equal'
-                                for other in lower)):
+                        and all(rank_of[observation.id] is not None
+                                and rank_of[observation.id] < highest
+                                for observation in lower)):
                     value = self._display_value(preferred_value)
-                    preferred_type = self.store.evidence[
-                        preferred_value.evidence_id
-                    ].source_type
+                    preferred_label = _AUTHORITY_LABEL[highest]
                     lower_types = sorted({
-                        self.store.evidence[observation.evidence_id].source_type
+                        _AUTHORITY_LABEL[rank_of[observation.id]]
                         for observation in lower
                     })
                     basis = (
                         'The published rate table is the direct quote schedule; '
-                        'calculator content is a derived source and may lag it.'
-                        if preferred_type == 'official_rate_table'
-                        and 'calculator' in lower_types
+                        'calculator and narrative (news/blog/press/PDF) content '
+                        'is derived or dated and may lag it.'
+                        if highest == _AUTHORITY_RATE_TABLE
                         else 'The selected source role has higher authority for this value.'
                     )
                     reason = (
                         f'Believed winner: {value}. {basis} The latest full-site '
-                        f'snapshot supports it in {preferred_type}; the competing '
+                        f'snapshot supports it in {preferred_label}; the competing '
                         f'value is from lower-authority source class(es): '
                         f'{", ".join(lower_types)}.'
                     )
@@ -564,14 +603,23 @@ class ConflictDetector:
         facts = sorted(self.store.facts.values(), key=lambda fact: str(fact.id))
         observations_by_fact = defaultdict(list)
         for observation in self.store.observations.values():
-            evidence = self.store.evidence[observation.evidence_id]
+            evidence = self.store.evidence.get(observation.evidence_id)
+            if evidence is None:
+                continue
             if snapshot_id is None or evidence.snapshot_id == snapshot_id:
                 observations_by_fact[observation.fact_id].append(observation)
 
+        # Only same-attribute pairs can ever conflict, so bucket first instead
+        # of walking every pair of Facts (quadratic in the whole fact count).
+        facts_by_attribute = defaultdict(list)
+        for fact in facts:
+            if fact.attribute not in _NON_CONFLICT_ATTRIBUTES:
+                facts_by_attribute[fact.attribute].append(fact)
+        fact_pairs = [pair for attribute in sorted(facts_by_attribute)
+                      for pair in combinations(facts_by_attribute[attribute], 2)]
+
         conflicts = []
-        for left, right in combinations(facts, 2):
-            if left.attribute != right.attribute or left.attribute in _NON_CONFLICT_ATTRIBUTES:
-                continue
+        for left, right in fact_pairs:
             parent_child = None if left.entity == right.entity else self._parent_child(left, right)
             if left.entity != right.entity and parent_child is None:
                 continue
@@ -691,11 +739,13 @@ class ConflictDetector:
             raise ValueError(f'Unknown snapshot: {snapshot_id}')
         by_fact = defaultdict(list)
         for observation in self.store.observations.values():
+            # A dangling reference skips that one observation instead of
+            # aborting the whole report (a raise here would zero the pillar).
             if observation.fact_id not in self.store.facts:
-                raise ValueError(f'Observation references unknown Fact: {observation.id}')
+                continue
             evidence = self.store.evidence.get(observation.evidence_id)
             if evidence is None or evidence.snapshot_id not in self.store.snapshots:
-                raise ValueError(f'Observation references unknown Evidence/snapshot: {observation.id}')
+                continue
             if snapshot_id is None or evidence.snapshot_id == snapshot_id:
                 by_fact[observation.fact_id].append((evidence.snapshot_id, observation))
 
@@ -730,6 +780,7 @@ class ConflictDetector:
             differing_observations = {}
             within_confirmed = within_uncertain = 0
             cross_confirmed = cross_uncertain = 0
+            superseded_pairs = 0
             for (left_key, left_observations), (right_key, right_observations) in combinations(assertions, 2):
                 left_snapshot = left_key[0]
                 right_snapshot = right_key[0]
@@ -737,7 +788,20 @@ class ConflictDetector:
                 right = right_observations[0]
                 relation = self._value_relation(left, right)
                 temporal = self._temporal_relation(left, right)
-                if relation == 'equal' or temporal == 'disjoint':
+                if relation == 'equal':
+                    continue
+                if temporal == 'disjoint':
+                    # Explicitly dated, non-overlapping versions of one Fact
+                    # (a rate sheet re-issued with a new effective date) are a
+                    # version change between snapshots. They are reported with
+                    # the later value as the resolution, as the overlapping-
+                    # scope detector already does, instead of being dropped.
+                    if _report_version_changes():
+                        superseded_pairs += 1
+                        differing_observations.update(
+                            (observation.id, observation)
+                            for observation in (*left_observations, *right_observations)
+                        )
                     continue
                 is_confirmed = relation == 'different' and temporal == 'overlap'
                 if left_snapshot == right_snapshot:
@@ -756,14 +820,19 @@ class ConflictDetector:
                 )
             if differing_observations:
                 confirmed = within_confirmed + cross_confirmed
-                status = 'confirmed_conflict' if confirmed else 'potential_conflict'
+                status = (
+                    'confirmed_conflict' if confirmed else
+                    'potential_conflict' if within_uncertain + cross_uncertain else
+                    'resolved_version_difference'
+                )
                 scope = snapshot_id or 'all snapshots'
                 reason = (
                     f'{status}: same Fact; '
                     f'within-snapshot pairs: {within_confirmed} confirmed, '
                     f'{within_uncertain} uncertain; '
                     f'across-snapshot pairs: {cross_confirmed} confirmed, '
-                    f'{cross_uncertain} uncertain. '
+                    f'{cross_uncertain} uncertain; '
+                    f'explicitly superseded effective-date pairs: {superseded_pairs}. '
                 )
                 resolution = None
                 # A snapshot-scoped audit must not use evidence from a later
@@ -790,7 +859,37 @@ class ConflictDetector:
         # Different Fact identities carry different qualifiers or product
         # conditions. Do not promote them to conflicts based on fuzzy qualifier
         # compatibility; conflicts require the same Fact and conditions.
-        conflicts.extend(self._detect_overlapping_scope_conflicts(snapshot_id=snapshot_id))
-        conflicts.extend(self._statement_conflicts(snapshot_id=snapshot_id))
+        # Each secondary detector is isolated: one failing must not discard the
+        # conflicts already found by the others.
+        for secondary in (self._detect_overlapping_scope_conflicts,
+                          self._statement_conflicts):
+            try:
+                conflicts.extend(secondary(snapshot_id=snapshot_id))
+            except Exception:
+                logger.warning('%s failed; continuing without it', secondary.__name__,
+                               exc_info=True)
+        conflicts = self._dedupe(conflicts)
         return sorted(conflicts, key=lambda conflict: (conflict.topic, tuple(conflict.values),
             tuple((source.url, source.quote or '') for source in conflict.sources)))
+
+    @staticmethod
+    def _dedupe(conflicts):
+        """Drop repeats of the same contradiction reported by several detectors.
+
+        The scorer matches each reference conflict to one submitted conflict, so
+        extra copies only count as false positives. Identity is the competing
+        values plus the pages/snapshots they come from; the copy that carries a
+        resolution wins.
+        """
+        best = {}
+        order = []
+        for conflict in conflicts:
+            key = (tuple(sorted(conflict.values)),
+                   frozenset((source.url, source.snapshot_id)
+                             for source in conflict.sources))
+            if key not in best:
+                best[key] = conflict
+                order.append(key)
+            elif best[key].resolution is None and conflict.resolution is not None:
+                best[key] = conflict
+        return [best[key] for key in order]

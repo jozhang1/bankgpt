@@ -19,7 +19,7 @@ from retrieval.quote_render_guard import (
     pending_quote_competitors,
     render_associated_values,
 )
-from retrieval.answer_selector import AnswerSelection
+from retrieval.answer_selector import AnswerSelection, snapshot_scope
 
 
 class KnowledgeAnswerFlow:
@@ -423,7 +423,49 @@ class KnowledgeAnswerFlow:
                         sources.append(Source(url=cited_evidence.source_url,
                                               snapshot_id=cited_evidence.snapshot_id,
                                               quote=quote))
+                if admitted:
+                    # Every page that states the rendered value supports it.
+                    # Which of them the validator happened to quote varies run
+                    # to run, so cite each supporting page deterministically.
+                    support = self.processor.store.semantic_support.get(observation.id)
+                    own_quote = (support.claim_quote if support and support.claim_quote
+                                 and support.claim_quote in evidence.text
+                                 else evidence.text[:500])
+                    own_source = Source(url=evidence.source_url,
+                                        snapshot_id=evidence.snapshot_id,
+                                        quote=own_quote)
+                    own_key = self.answer_renderer.source_display_key(own_source)
+                    if (own_key not in seen_sources
+                            and not any(existing.url == own_source.url
+                                        and existing.snapshot_id == own_source.snapshot_id
+                                        for existing in sources)):
+                        seen_sources.add(own_key)
+                        sources.append(own_source)
             if admitted:
+                # Facts merged into one displayed row (identical values for
+                # the same product on different pages) are all cited.
+                group_ids = duplicate_group_by_id.get(fact.id, (fact.id,))
+                if fact.id == group_ids[0]:
+                    for other in available:
+                        if other.fact.id == fact.id or other.fact.id not in group_ids:
+                            continue
+                        for other_obs in other.observations:
+                            if str(other_obs.id) not in accepted_ids:
+                                continue
+                            other_evidence = self.processor.store.evidence[other_obs.evidence_id]
+                            other_support = self.processor.store.semantic_support.get(other_obs.id)
+                            other_quote = (other_support.claim_quote
+                                           if other_support and other_support.claim_quote
+                                           and other_support.claim_quote in other_evidence.text
+                                           else other_evidence.text[:500])
+                            other_source = Source(url=other_evidence.source_url,
+                                                  snapshot_id=other_evidence.snapshot_id,
+                                                  quote=other_quote)
+                            if not any(existing.url == other_source.url
+                                       and existing.snapshot_id == other_source.snapshot_id
+                                       for existing in sources):
+                                seen_sources.add(self.answer_renderer.source_display_key(other_source))
+                                sources.append(other_source)
                 for source in associated_sources_by_primary.get(fact.id, ()):
                     source_key = self.answer_renderer.source_display_key(source)
                     if source_key not in seen_sources:
@@ -465,7 +507,10 @@ class KnowledgeAnswerFlow:
             summary_hits, self.processor.store.evidence,
         )
         if records:
-            reference_date = as_of or date.today().isoformat()
+            # "Current" is the selected snapshot's date, never the wall clock.
+            scope = snapshot_scope(self.processor.store, as_of)
+            reference_date = as_of or (
+                scope.snapshot.taken_on if scope is not None else None)
             summary = self.reasoner.summarize(
                 question, records, reference_date=reference_date,
             )

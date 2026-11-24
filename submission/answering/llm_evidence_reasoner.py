@@ -136,12 +136,25 @@ as repair guidance, never as evidence; use only verified_quotes.
 
 TEMPORAL FACT MATCHING
 
-Resolve relative time expressions in the question, such as
-"last year", using the supplied input reference_date.
+The input reference_date is the date of the website snapshot the
+evidence comes from. Treat it as "today". Resolve relative time
+expressions in the question, such as "last year", "this year",
+"now", "currently", "latest" or "upcoming", against reference_date,
+never against the real-world date or your own training data.
 
-If an explicit as_of date is supplied, use it to determine
-the requested temporal perspective. Do not substitute the
-current date or an article's publication date.
+If an explicit as_of date is supplied, it is the requested temporal
+perspective and reference_date equals it. If no as_of date is
+supplied, the question concerns the website as of the snapshot
+date. Do not substitute the real-world current date or an article's
+publication date. Judge whether an offer, rate or event is current,
+expired or upcoming only by whether the excerpts show it applies on
+reference_date, never relative to any other day.
+
+If the excerpts report no value for the exact period the question
+names once it is resolved (for example no figure for 2025), do not
+stop at "not stated". State every figure the excerpts do report for
+other periods, each with its own period, in chronological order,
+omitting none, so the reader can pick the one they mean.
 
 For every time-sensitive factual claim, distinguish:
 
@@ -376,7 +389,8 @@ class LLMEvidenceReasoner:
         if not eligible:
             return None
         snapshot = max(eligible, key=lambda s: (date.fromisoformat(s.taken_on), s.snapshot_id))
-        reference = date.fromisoformat(as_of) if as_of else date.today()
+        # "Current" is the selected snapshot's date, never the wall clock.
+        reference = date.fromisoformat(as_of) if as_of else date.fromisoformat(snapshot.taken_on)
         match_by_id = {m.fact.id: m for m in matches}
         sources = {e.id: e for e in evidence if e.snapshot_id == snapshot.snapshot_id}
         support_by_observation = {}

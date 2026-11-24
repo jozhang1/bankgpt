@@ -29,7 +29,8 @@ def snapshot_scope(store, as_of: str | date | None = None) -> SnapshotScope | No
     snapshot = max(eligible, key=lambda item: (date.fromisoformat(item.taken_on),
                                                item.snapshot_id))
     reference = date.fromisoformat(as_of) if isinstance(as_of, str) else as_of
-    return SnapshotScope(snapshot, reference or date.today())
+    # "Current" means the selected snapshot's date, never the wall clock.
+    return SnapshotScope(snapshot, reference or date.fromisoformat(snapshot.taken_on))
 
 
 def evidence_is_eligible(store, evidence, snapshot_id: str, *,

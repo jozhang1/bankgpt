@@ -1,0 +1,1 @@
+"""Participant knowledge-system implementation."""

@@ -1,0 +1,31 @@
+# Local credentials
+.env
+.env.*
+!.env.example
+
+# Generated evaluation output and local model caches
+/results/
+/.cache/
+
+# Expanded snapshots are recreated from snapshots_zip/ by the harness
+/snapshots/0*/
+/snapshots_zip/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Local tooling and build output
+.DS_Store
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+build/
+dist/
+
+# Analysis, staging copies, and generated submission archives
+/analysis/
+/submission*.zip

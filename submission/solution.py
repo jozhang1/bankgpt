@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -34,6 +35,8 @@ from answering.llm_evidence_reasoner import LLMEvidenceReasoner
 from answering.answerability_gate import AnswerabilityGate
 from answering.knowledge_answer_flow import KnowledgeAnswerFlow
 from retrieval.location_index import LocationIndex
+
+logger = logging.getLogger(__name__)
 
 
 class Knowledge(KnowledgeAnswerFlow, KnowledgeSystem):
@@ -93,8 +96,17 @@ class Knowledge(KnowledgeAnswerFlow, KnowledgeSystem):
         self.last_gate_decisions = ()
         self.last_version_selections = ()
         self.last_quote_schedule_selections = ()
-        selection = self.answer_selector.select(question, as_of=as_of)
-        return self.answer_renderer.render(selection, question=question, as_of=as_of)
+        try:
+            selection = self.answer_selector.select(question, as_of=as_of)
+            return self.answer_renderer.render(selection, question=question, as_of=as_of)
+        except Exception:
+            # One failing question must not become an unhandled error; say
+            # "I don't know" rather than guess, and keep the traceback.
+            logger.exception('answer() failed for question %r (as_of=%r)', question, as_of)
+            return Answer(
+                text="I couldn’t find information matching your question in the available sources.",
+                sources=[], confident=False,
+            )
 
     def conflicts(self) -> list[Conflict]:
         """Expose source disagreements using the harness's module identity."""

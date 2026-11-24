@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from dataclasses import asdict, replace
 from collections import Counter
 import json
+import os
 from datetime import datetime, timezone
 from hashlib import sha256
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -37,6 +38,12 @@ from facts.attribute_normalizer import RATE_ATTRIBUTES
 
 if TYPE_CHECKING:
     from contract import Page, Snapshot
+
+
+def _verbose_ingest(*parts, **kwargs) -> None:
+    """Per-fact dumps are noisy; print them only when BANKGPT_VERBOSE_INGEST=1."""
+    if os.environ.get('BANKGPT_VERBOSE_INGEST', '').strip() == '1':
+        print(*parts, **kwargs)
 
 
 class KnowledgeProcessor:
@@ -389,13 +396,13 @@ class KnowledgeProcessor:
                         'fact': asdict(result[0]),
                         'observation': asdict(result[1]),
                     }
-                    print(f"{progress}: success=" + json.dumps(success, ensure_ascii=False, default=str),
+                    _verbose_ingest(f"{progress}: success=" + json.dumps(success, ensure_ascii=False, default=str),
                           file=sys.stderr, flush=True)
                 else:
                     detail = {'candidate_index': candidate_index, 'entity': normalized.entity,
                               'attribute': normalized.attribute, 'value': normalized.value, 'unit': normalized.unit,
                               'qualifiers': normalized.qualifiers, 'issues': result[2].issues}
-                    print(f"{progress}: skipped_candidate=" + json.dumps(detail, ensure_ascii=False),
+                    _verbose_ingest(f"{progress}: skipped_candidate=" + json.dumps(detail, ensure_ascii=False),
                           file=sys.stderr, flush=True)
             print(f"{progress}: candidates={len(candidates)}, "
                   f"built={built_semantic_count}, skipped={len(candidates) - built_semantic_count}, "
@@ -419,8 +426,8 @@ class KnowledgeProcessor:
         self.semantic_decisions.update(semantic_decisions)
         self.semantic_rejections.update(semantic_rejections)
         for fact, observation, _ in semantic_results:
-            print("Semantic Fact [committed]:", fact, flush=True)
-            print("Semantic FactObservation [committed]:", observation, flush=True)
+            _verbose_ingest("Semantic Fact [committed]:", fact, flush=True)
+            _verbose_ingest("Semantic FactObservation [committed]:", observation, flush=True)
 
     def _chunk_page(
         self, cleaned: str, page: Page, *, blocks: list[Block] | None = None,

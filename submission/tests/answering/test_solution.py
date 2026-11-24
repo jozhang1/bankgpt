@@ -30,6 +30,16 @@ class KnowledgeIntegrationTests(unittest.TestCase):
             render.assert_not_called()
 
 
+    def test_answer_failure_returns_an_unconfident_answer_instead_of_raising(self):
+        knowledge = Knowledge()
+        with patch.object(knowledge.answer_selector, 'select', side_effect=RuntimeError('boom')):
+            with self.assertLogs(level='ERROR'):
+                answer = knowledge.answer('Anything?')
+        self.assertFalse(answer.confident)
+        self.assertFalse(answer.sources)
+        self.assertIn('couldn’t find information', answer.text)
+
+
     def test_ingest_and_conflicts_use_the_harness_module_identity(self):
         knowledge = Knowledge()
         pages = [Page(f'https://example.com/{i}', 'Auto Loans',

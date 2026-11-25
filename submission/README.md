@@ -18,7 +18,7 @@ The public types and exact method signatures are defined by `harness/contract.py
 
 ### Ingestion and history
 
-Each snapshot remains a dated version. Pages are cleaned and parsed into structured blocks, grouped into retrieval evidence, and retained with their source URL, title, and snapshot provenance. Deterministic extraction builds normalized facts and observations when the source structure supports them. Semantic extraction can add candidates for supported fact profiles when the OpenAI ingestion model is configured; candidates still pass source and entity validation before they are admitted.
+Each snapshot remains a dated version. Pages are cleaned and parsed into structured blocks, grouped into retrieval evidence, and retained with their source URL, title, and snapshot provenance. Deterministic extraction builds normalized facts and observations when the source structure supports them; a rate stated as a whole line such as `6-month certificate APY: 3.50%` is first rewritten into a small table so the same extractor reads it (`ingestion/rate_lines.py`). Semantic extraction can add candidates for supported fact profiles when the OpenAI ingestion model is configured; candidates still pass source and entity validation before they are admitted.
 
 Facts are identified by normalized entity, attribute, and qualifiers. Values, evidence, snapshot dates, and any source-supported effective dates belong to observations, so changes remain traceable without merging different products or conditions.
 
@@ -26,7 +26,7 @@ Facts are identified by normalized entity, attribute, and qualifiers. Values, ev
 
 The answer selector first considers source-backed Facts and applies product, metric, qualifier, snapshot, and effective-date checks. It renders only observations admitted by the answerability checks. If the Fact route cannot produce an admitted answer, it falls back to the evidence route.
 
-Evidence retrieval combines BM25 with vectors from `sentence-transformers/all-MiniLM-L6-v2` using rank fusion. It sends up to 30 fused candidates to the local `cross-encoder/ms-marco-MiniLM-L-6-v2` reranker; the answer path then gives up to five selected excerpts to the summary model. Both Hugging Face models run locally and can be overridden with `BANKGPT_VECTOR_MODEL` and `BANKGPT_RERANK_MODEL`. On the first index build, the libraries download missing models into the Hugging Face cache. To download them before running the harness (for example, before an offline run), install `submission/requirements.txt`, then run:
+Evidence retrieval combines BM25 with vectors from `sentence-transformers/all-MiniLM-L6-v2` using rank fusion. It sends up to 30 fused candidates to the local `cross-encoder/ms-marco-MiniLM-L-6-v2` reranker; the answer path then gives up to five selected excerpts to the summary model. Both Hugging Face models run locally and can be overridden with `BANKGPT_VECTOR_MODEL` and `BANKGPT_RERANK_MODEL`. On the first index build, the libraries download missing models into the Hugging Face cache. To download them before running the harness (for example, before an offline run), install `requirements.txt` from the repository root, then run:
 
 ```bash
 python - <<'PY'
@@ -39,11 +39,13 @@ PY
 
 If a local model cannot load, retrieval falls back to the available ranking signals. The summary path validates its structured output and quote IDs before rendering; on failure, it uses the original retrieved excerpt instead of presenting an unvalidated summary as confirmed.
 
+"Current" means the date of the selected snapshot, never the wall clock: without `as_of` the reference date is the newest snapshot's date, and with `as_of` it is that date. Relative expressions in a question ("last year", "now", "upcoming") are resolved against that reference date, and the evidence-summary prompt is given the same date. If answering raises an unexpected error, `answer()` logs it and returns an unconfident "couldn't find information" answer instead of failing the question.
+
 For `as_of` questions, snapshot selection uses `Snapshot.taken_on`. An article publication date or snapshot date alone does not prove when a rate became effective or that an older offer ended. Unknown applicability remains unresolved instead of being guessed.
 
 ### Conflict reporting
 
-Conflicts include differing observations of the same normalized Fact across snapshots. Different Facts are also compared when they share the same entity and metric and have distinct, overlapping, fully bounded numeric scopes defined by the qualifier schema (for example, overlapping model-year ranges). A catalog parent and child product may also be compared when the parent-side observation explicitly names the child in its structured source context; catalog lineage alone is not enough. One-sided caps/floors, disjoint ranges, and incompatible categorical conditions are not enough to merge them. Repeated copies of an assertion are collapsed while source excerpts are preserved. Source-quoted pending statements are compared with Facts and one another; these are reported only as potential conflicts and never receive an automatic winner. For an unscoped report, `resolution` is the final selected value when observations in the latest full-site snapshot agree. If they differ, a uniquely latest source-supported `effective_from` may resolve the value when no older interval explicitly extends through it. Source-role precedence is used only when effective dates do not establish a winner: a narrative page (a newsroom, blog, press, article or PDF URL) ranks below a `calculator`, which ranks below an `official_rate_table`. A winner is chosen only when every disagreeing observation has a known, strictly lower rank than the winning one; equal or unknown ranks leave `resolution` as `None`. Table and calculator roles are inferred from page/table structure and calculator UI signals; only the narrative rank is inferred from URL words, because a dated news item or PDF that happens to contain a rate table is still a description of a past rate, not the current schedule. Two dated, non-overlapping versions of one Fact (for example a rate that changed between snapshots) are reported as a conflict whose `resolution` is the later value and whose reason starts with `resolved_version_difference`; set `BANKGPT_REPORT_VERSION_CHANGES=0` to leave such version changes out. The reason explains the selection. If current evidence does not establish one value, `resolution` remains `None`. Snapshot-scoped reports do not use future versions to select a winner. The answer route separately uses source-supported effective dates when selecting a value for a question.
+Conflicts include differing observations of the same normalized Fact across snapshots. Different Facts are also compared when they share the same entity and metric and have distinct, overlapping, fully bounded numeric scopes defined by the qualifier schema (for example, overlapping model-year ranges). A catalog parent and child product may also be compared when the parent-side observation explicitly names the child in its structured source context; catalog lineage alone is not enough. One-sided caps/floors, disjoint ranges, and incompatible categorical conditions are not enough to merge them. Repeated copies of an assertion are collapsed while source excerpts are preserved. Source-quoted pending statements are compared with Facts and one another; these are reported only as potential conflicts and never receive an automatic winner. For an unscoped report, `resolution` is the final selected value when observations in the latest full-site snapshot agree. If they differ, a uniquely latest source-supported `effective_from` that has started by the snapshot date may resolve the value when no older interval explicitly extends through it (an assertion that starts only after the snapshot date is announced, not current). Source-role precedence is used only when effective dates do not establish a winner: a narrative page (a newsroom, blog, press, article or PDF URL) ranks below a `calculator`, which ranks below an `official_rate_table`. A winner is chosen only when every disagreeing observation has a known, strictly lower rank than the winning one; equal or unknown ranks leave `resolution` as `None`. Table and calculator roles are inferred from page/table structure and calculator UI signals; only the narrative rank is inferred from URL words, because a dated news item or PDF that happens to contain a rate table is still a description of a past rate, not the current schedule. Two dated, non-overlapping versions of one Fact (for example a rate that changed between snapshots) are reported as a conflict whose `resolution` is the later value and whose reason starts with `resolved_version_difference`; set `BANKGPT_REPORT_VERSION_CHANGES=0` to leave such version changes out. The reason explains the selection. If current evidence does not establish one value, `resolution` remains `None`. Snapshot-scoped reports do not use future versions to select a winner. The answer route separately uses source-supported effective dates when selecting a value for a question.
 
 ## OpenAI configuration
 
@@ -82,7 +84,7 @@ Every environment variable the submission reads is defined in `foundation/config
 Use Python 3.11, as in the assignment environment. From the repository root:
 
 ```bash
-python -m pip install -r submission/requirements.txt
+python -m pip install -r requirements.txt
 python harness/run_eval.py --submission submission --eval eval/public_eval.jsonl
 ```
 
@@ -97,10 +99,10 @@ The contract requires each `answer()` call to finish within 60 seconds. Snapshot
 ## Files
 
 - `solution.py`: harness entry point and public interface.
-- `foundation/`: shared contracts, store, product and entity definitions.
+- `foundation/`: shared contracts, store, product and entity definitions, and `config.py` (every environment variable).
 - `ingestion/`: cleaning, block parsing, evidence chunking, and fact extraction.
 - `facts/`: normalization, matching, temporal resolution, and conflict detection.
 - `retrieval/`: evidence search, location lookup, query scope, and version selection.
 - `answering/`: answerability checks, LLM adapter, and answer rendering.
-- `requirements.txt`: Python dependencies installed by the evaluator.
-- `NOTES.md`: system approach and required API configuration.
+- Repository root: `requirements.txt` (Python dependencies installed by the evaluator) and `NOTES.md` (system approach and required API configuration).
+- `tests/` and `conftest.py`: unit and regression tests. Run `python -m pytest submission` from the repository root, or `python -m pytest` inside `submission/`; they are not needed by the evaluator.

@@ -4,6 +4,8 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+
+from foundation import config
 from tempfile import NamedTemporaryFile
 
 
@@ -22,7 +24,7 @@ class SemanticModelCache:
     def key(self, request):
         payload = {'version': self.VERSION, 'model': self.namespace,
                    'request': request,
-                   'max_output_tokens': os.environ.get('BANKGPT_MAX_OUTPUT_TOKENS', '4096')}
+                   'max_output_tokens': config.max_output_tokens_setting()}
         return sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False,
                                  separators=(',', ':')).encode()).hexdigest()
 

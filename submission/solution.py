@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -23,6 +22,7 @@ from ingestion.processor import KnowledgeProcessor
 from ingestion.semantic_extractor import SemanticExtractor
 from ingestion.semantic_source_validator import SemanticSourceValidator
 from foundation.entities import DUPACO_ENTITIES
+from foundation import config
 from retrieval.retrieval import EvidenceRetriever
 from retrieval.answer_selector import AnswerSelector
 from answering.answer_renderer import AnswerRenderer
@@ -134,8 +134,5 @@ def build() -> KnowledgeSystem:
             if ingestion_caller is not None
             else ()
         ),
-        semantic_cache_dir=os.environ.get(
-            'BANKGPT_SEMANTIC_CACHE_DIR',
-            str(Path(__file__).resolve().parent.parent / '.cache' / 'semantic'),
-        ),
+        semantic_cache_dir=config.semantic_cache_dir(),
     )

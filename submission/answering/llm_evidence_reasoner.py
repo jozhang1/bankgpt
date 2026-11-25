@@ -150,12 +150,6 @@ publication date. Judge whether an offer, rate or event is current,
 expired or upcoming only by whether the excerpts show it applies on
 reference_date, never relative to any other day.
 
-If the excerpts report no value for the exact period the question
-names once it is resolved (for example no figure for 2025), do not
-stop at "not stated". State every figure the excerpts do report for
-other periods, each with its own period, in chronological order,
-omitting none, so the reader can pick the one they mean.
-
 For every time-sensitive factual claim, distinguish:
 
 - Reporting period: when the measured value or reported

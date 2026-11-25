@@ -1,6 +1,6 @@
 import unittest
 
-from ...ingestion.rate_lines import rate_lines_to_tables
+from ingestion.rate_lines import rate_lines_to_tables
 
 
 class RateLinesTests(unittest.TestCase):

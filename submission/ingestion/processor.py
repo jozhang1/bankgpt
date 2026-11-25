@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 from dataclasses import asdict, replace
 from collections import Counter
 import json
-import os
 from datetime import datetime, timezone
 from hashlib import sha256
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -20,6 +19,7 @@ from ingestion.cleaner import PageCleaner
 from ingestion.chunker import Block, Chunk, EvidenceChunker
 from ingestion.metadata_extractor import DocumentMetadata, MetadataExtractor
 from foundation.contract import Evidence, FactBuildAudit, PendingStatement
+from foundation import config
 from ingestion.extractor import FactExtractor
 from facts.entity_normalizer import EntityNormalizer
 from foundation.products import PRODUCTS
@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 
 def _verbose_ingest(*parts, **kwargs) -> None:
     """Per-fact dumps are noisy; print them only when BANKGPT_VERBOSE_INGEST=1."""
-    if os.environ.get('BANKGPT_VERBOSE_INGEST', '').strip() == '1':
+    if config.verbose_ingest():
         print(*parts, **kwargs)
 
 

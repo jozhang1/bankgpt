@@ -1,7 +1,7 @@
 import unittest
 
-from ...solution import Knowledge, Snapshot
-from ...facts.conflict_detector import ConflictDetector
+from solution import Knowledge, Snapshot
+from facts.conflict_detector import ConflictDetector
 from contract import Conflict, Page, Source
 
 
@@ -70,16 +70,32 @@ class ConflictDetectorTests(unittest.TestCase):
                                   [_page(url, 'Auto Loans', '3.90%', '2026-05-12T00:00:00Z')]))
         knowledge.ingest(Snapshot('sep', '2026-09-28',
                                   [_page(url, 'Auto Loans', '4.00%')]))
-        # Patch the class Knowledge actually uses (the tests import this module
-        # under a package prefix, which is a different module object).
-        detector_cls = type(knowledge.conflict_detector)
-        with patch.object(detector_cls, '_temporal_relation', return_value='disjoint'):
+        with patch.object(ConflictDetector, '_temporal_relation', return_value='disjoint'):
             conflict = self._conflict_for(knowledge, '3.90%', '4.00%')
             self.assertIsNotNone(conflict)
             self.assertEqual(conflict.resolution, '4.00%')
             self.assertIn('resolved_version_difference', conflict.reason)
             with patch.dict('os.environ', {'BANKGPT_REPORT_VERSION_CHANGES': '0'}):
                 self.assertIsNone(self._conflict_for(knowledge, '3.90%', '4.00%'))
+
+    def test_assertion_not_yet_in_effect_is_not_the_current_value(self):
+        from datetime import date
+        from types import SimpleNamespace as NS
+        current = NS(value='3.90', unit='percent', effective_from=date(2026, 9, 1), effective_to=None)
+        upcoming = NS(value='4.00', unit='percent', effective_from=date(2026, 11, 1), effective_to=None)
+        detector = ConflictDetector.__new__(ConflictDetector)
+        value, winners, _ = detector._effective_date_resolution(
+            [current, upcoming], reference=date(2026, 9, 28))
+        self.assertEqual(value, '3.90%')
+        self.assertEqual(winners, (current,))
+        # Without a reference date the old behaviour (latest start wins) remains.
+        value, _, _ = detector._effective_date_resolution([current, upcoming])
+        self.assertEqual(value, '4.00%')
+        # Nothing in effect yet: no winner is invented.
+        value, winners, reason = detector._effective_date_resolution(
+            [upcoming], reference=date(2026, 9, 28))
+        self.assertIsNone(value)
+        self.assertIn('none is in effect yet', reason)
 
     def test_authority_ranks(self):
         class Evidence:

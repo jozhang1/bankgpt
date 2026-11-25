@@ -1,17 +1,18 @@
 """Find source-backed disagreements within and across snapshots."""
 
 from collections import defaultdict
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from itertools import combinations, product
 import json
 import logging
-import os
 import re
 from types import SimpleNamespace
 
 from contract import Conflict, Source
 from facts.fact_matching import MatchStatus
 from facts.qualifier_schema import QUALIFIER_SCHEMA, compare_fact_qualifiers
+from foundation import config
 from foundation.contract import FactObservation, PendingStatement
 from foundation.entities import entity_label
 from foundation.products import PRODUCTS
@@ -26,7 +27,7 @@ def _report_version_changes() -> bool:
     On by default; set BANKGPT_REPORT_VERSION_CHANGES=0 to restore the older
     behaviour of leaving them out, so the two can be compared on real data.
     """
-    return os.environ.get('BANKGPT_REPORT_VERSION_CHANGES', '1').strip() != '0'
+    return config.report_version_changes()
 
 
 _NON_CONFLICT_ATTRIBUTES = frozenset({'application_url', 'rates_url'})
@@ -183,10 +184,24 @@ class ConflictDetector:
                 return quote
         return evidence.text
 
-    def _effective_date_resolution(self, observations):
-        """Select a uniquely latest source-dated assertion when periods roll over."""
+    def _effective_date_resolution(self, observations, reference=None):
+        """Select a uniquely latest source-dated assertion when periods roll over.
+
+        ``reference`` is the date the value is "current" on (the latest
+        snapshot's date). An assertion that only starts after it is announced,
+        not yet in effect, so it cannot be the current value; this matches how
+        the answer route excludes observations that start after the query date.
+        """
         if any(observation.effective_from is None for observation in observations):
             return None, (), 'Competing observations do not all have an effective start date.'
+        if reference is not None:
+            in_effect = [o for o in observations if o.effective_from <= reference]
+            if not in_effect:
+                return None, (), (
+                    'Every competing assertion starts after the snapshot date '
+                    f'({reference.isoformat()}), so none is in effect yet.'
+                )
+            observations = in_effect
 
         latest_date = max(observation.effective_from for observation in observations)
         winners = tuple(observation for observation in observations
@@ -265,7 +280,11 @@ class ConflictDetector:
         if any(self._value_relation(winner, other) != 'equal'
                for other in latest_observations[1:]):
             effective_value, effective_winners, effective_reason = (
-                self._effective_date_resolution(latest_observations)
+                self._effective_date_resolution(
+                    latest_observations,
+                    reference=date.fromisoformat(
+                        self.store.snapshots[latest_snapshot_id].taken_on),
+                )
             )
             if effective_value is not None:
                 return effective_value, effective_winners, effective_reason

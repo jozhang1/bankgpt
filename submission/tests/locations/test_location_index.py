@@ -1,5 +1,5 @@
 import unittest
-from ...solution import Knowledge, Snapshot
+from solution import Knowledge, Snapshot
 from contract import Page
 
 

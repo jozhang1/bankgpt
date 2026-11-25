@@ -1,8 +1,9 @@
 """Optional OpenAI Responses adapter; credentials are supplied by the environment."""
 from copy import deepcopy
 import json
-import os
 from pathlib import Path
+
+from foundation import config
 
 
 def strict_output_schema(schema: dict) -> dict:
@@ -64,7 +65,7 @@ class OpenAICaller:
         self.client = client
 
     def __call__(self, request: dict, timeout_seconds: float) -> dict:
-        max_output_tokens = int(os.environ.get('BANKGPT_MAX_OUTPUT_TOKENS', '4096'))
+        max_output_tokens = config.max_output_tokens()
         if max_output_tokens <= 0:
             raise ValueError('BANKGPT_MAX_OUTPUT_TOKENS must be positive.')
         options = {}
@@ -107,8 +108,8 @@ def _caller_from_environment(*, model_env: str, default_model: str | None = None
                              reasoning_effort: str | None = None,
                              temperature: float | None = None):
     load_local_environment()
-    key_present = bool(os.environ.get('OPENAI_API_KEY', '').strip())
-    configured_model = os.environ.get(model_env, '').strip()
+    key_present = config.openai_api_key_present()
+    configured_model = config.openai_model_override(model_env)
     model = configured_model or (default_model or '')
     if not key_present and not configured_model:
         return None  # No online model configured: preserve deterministic behavior.

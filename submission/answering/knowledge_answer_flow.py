@@ -88,6 +88,21 @@ class KnowledgeAnswerFlow:
             collection=selection.location.query.scope != 'specific',
         )
 
+    def _cite_observation_page(self, observation, sources, seen_sources):
+        """Add the page an observation was read from, once per page and snapshot."""
+        store = self.processor.store
+        evidence = store.evidence[observation.evidence_id]
+        if any(existing.url == evidence.source_url
+               and existing.snapshot_id == evidence.snapshot_id for existing in sources):
+            return
+        support = store.semantic_support.get(observation.id)
+        quote = (support.claim_quote
+                 if support and support.claim_quote and support.claim_quote in evidence.text
+                 else evidence.text[:500])
+        source = Source(url=evidence.source_url, snapshot_id=evidence.snapshot_id, quote=quote)
+        seen_sources.add(self.answer_renderer.source_display_key(source))
+        sources.append(source)
+
     def _render_fact_route(self, selection, question, as_of):
         matches = selection.matches
         if matches is None:
@@ -427,20 +442,7 @@ class KnowledgeAnswerFlow:
                     # Every page that states the rendered value supports it.
                     # Which of them the validator happened to quote varies run
                     # to run, so cite each supporting page deterministically.
-                    support = self.processor.store.semantic_support.get(observation.id)
-                    own_quote = (support.claim_quote if support and support.claim_quote
-                                 and support.claim_quote in evidence.text
-                                 else evidence.text[:500])
-                    own_source = Source(url=evidence.source_url,
-                                        snapshot_id=evidence.snapshot_id,
-                                        quote=own_quote)
-                    own_key = self.answer_renderer.source_display_key(own_source)
-                    if (own_key not in seen_sources
-                            and not any(existing.url == own_source.url
-                                        and existing.snapshot_id == own_source.snapshot_id
-                                        for existing in sources)):
-                        seen_sources.add(own_key)
-                        sources.append(own_source)
+                    self._cite_observation_page(observation, sources, seen_sources)
             if admitted:
                 # Facts merged into one displayed row (identical values for
                 # the same product on different pages) are all cited.
@@ -450,22 +452,8 @@ class KnowledgeAnswerFlow:
                         if other.fact.id == fact.id or other.fact.id not in group_ids:
                             continue
                         for other_obs in other.observations:
-                            if str(other_obs.id) not in accepted_ids:
-                                continue
-                            other_evidence = self.processor.store.evidence[other_obs.evidence_id]
-                            other_support = self.processor.store.semantic_support.get(other_obs.id)
-                            other_quote = (other_support.claim_quote
-                                           if other_support and other_support.claim_quote
-                                           and other_support.claim_quote in other_evidence.text
-                                           else other_evidence.text[:500])
-                            other_source = Source(url=other_evidence.source_url,
-                                                  snapshot_id=other_evidence.snapshot_id,
-                                                  quote=other_quote)
-                            if not any(existing.url == other_source.url
-                                       and existing.snapshot_id == other_source.snapshot_id
-                                       for existing in sources):
-                                seen_sources.add(self.answer_renderer.source_display_key(other_source))
-                                sources.append(other_source)
+                            if str(other_obs.id) in accepted_ids:
+                                self._cite_observation_page(other_obs, sources, seen_sources)
                 for source in associated_sources_by_primary.get(fact.id, ()):
                     source_key = self.answer_renderer.source_display_key(source)
                     if source_key not in seen_sources:

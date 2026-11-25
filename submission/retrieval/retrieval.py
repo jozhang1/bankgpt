@@ -1,17 +1,15 @@
 """Retrieval result models."""
 
 from dataclasses import dataclass
-from datetime import date
 import logging
-import os
 import re
 
 from rank_bm25 import BM25Okapi
 
+from foundation import config
 from foundation.contract import Evidence
 from foundation.store import KnowledgeStore
 from retrieval.semantic_query import selected_snapshot
-from foundation.source_urls import page_url
 
 logger = logging.getLogger(__name__)
 _VECTOR_MODELS = {}
@@ -33,11 +31,8 @@ class EvidenceRetriever:
         self._hashes: list[str] = []
         self._index_by_hash: dict[str, int] = {}
         self._by_snapshot: dict[str, dict[str, list[Evidence]]] = {}
-        self._by_url = {}
         self._built = False
-        self._vector_model_name = vector_model_name or os.environ.get(
-            'BANKGPT_VECTOR_MODEL', 'sentence-transformers/all-MiniLM-L6-v2',
-        )
+        self._vector_model_name = vector_model_name or config.vector_model_name()
         self._vector_encoder = vector_encoder
         self._vector_attempted = vector_encoder is not None
         self._vector_disabled = False
@@ -68,7 +63,6 @@ class EvidenceRetriever:
         texts: dict[str, str] = {}
         vector_texts: dict[str, str] = {}
         by_snapshot: dict[str, dict[str, list[Evidence]]] = {}
-        by_url = {}
         for evidence in self.store.evidence.values():
             texts.setdefault(evidence.content_hash, evidence.text)
             title = evidence.source_title.strip()
@@ -81,9 +75,6 @@ class EvidenceRetriever:
             ).setdefault(
                 evidence.content_hash, []
             ).append(evidence)
-            url = page_url(evidence.source_url)
-            if url:
-                by_url.setdefault((evidence.snapshot_id, url), []).append(evidence)
 
         for snapshot in by_snapshot.values():
             for occurrences in snapshot.values():
@@ -106,8 +97,6 @@ class EvidenceRetriever:
         self._build_vector_index(vector_texts)
         self._load_reranker()
         self._by_snapshot = by_snapshot
-        self._by_url = {key: sorted(records, key=lambda e: (
-            e.in_recommendations, e.content_hash, str(e.id))) for key, records in by_url.items()}
         self._built = True
 
     def _load_reranker(self):
@@ -116,7 +105,7 @@ class EvidenceRetriever:
         if self._rerank_attempted:
             return None
         self._rerank_attempted = True
-        name = os.environ.get('BANKGPT_RERANK_MODEL', 'cross-encoder/ms-marco-MiniLM-L-6-v2')
+        name = config.rerank_model_name()
         try:
             if name not in _RERANK_MODELS:
                 from sentence_transformers import CrossEncoder
@@ -252,21 +241,6 @@ class EvidenceRetriever:
                            self.vector_error)
             return []
 
-    def lookup_url(self, url, *, as_of=None):
-        """All source occurrences at the exact target in the selected snapshot.
-
-        Fragment selects a browser region, not another fetched page. Query
-        strings, host and scheme remain significant; no fabricated redirects.
-        """
-        if not self._built:
-            self.build_bm25_index()
-        snapshot = selected_snapshot(self.store, as_of)
-        key = page_url(url)
-        if snapshot is None or key is None:
-            return []
-        return [e for e in self._by_url.get((snapshot.snapshot_id, key), ())
-                if not e.in_recommendations]
-
     def search(
         self,
         query: str,
@@ -285,18 +259,9 @@ class EvidenceRetriever:
         if not tokens:
             return []
 
-        cutoff = date.fromisoformat(as_of) if as_of else date.max
-        snapshots = [
-            s for s in self.store.snapshots.values()
-            if date.fromisoformat(s.taken_on) <= cutoff
-        ]
-        if not snapshots:
+        snapshot = selected_snapshot(self.store, as_of)
+        if snapshot is None:
             return []
-
-        snapshot = max(
-            snapshots,
-            key=lambda s: (date.fromisoformat(s.taken_on), s.snapshot_id),
-        )
         eligible = self._by_snapshot.get(snapshot.snapshot_id, {})
         lexical = []
         if self._bm25 is not None:

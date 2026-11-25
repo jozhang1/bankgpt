@@ -61,6 +61,22 @@ During the configured run, page evidence is sent to OpenAI for semantic extracti
 
 The OpenAI client permits one automatic retry for retryable transport failures. Schema, claim, or citation validation failures can trigger one application-level repair request that includes the previous response and validation errors. Retries may increase answer latency; the implementation does not claim a particular p95 latency.
 
+## Configuration reference
+
+Every environment variable the submission reads is defined in `foundation/config.py`; no other module reads the environment (a test enforces this). Values are read when used, so changing one takes effect without restarting the process.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | unset | Enables the OpenAI calls. Supply it through the environment or the repository-root `.env`; never commit it. |
+| `OPENAI_MODEL` | `gpt-6-luna` | Model for semantic ingestion. |
+| `OPENAI_RETRIEVAL_MODEL` | `gpt-6-luna` | Model for answer-time evidence summarization. |
+| `BANKGPT_MAX_OUTPUT_TOKENS` | `4096` | Output-token limit per OpenAI call. It is part of the semantic cache key, so changing it re-runs extraction. |
+| `BANKGPT_SEMANTIC_CACHE_DIR` | `<repo root>/.cache/semantic` | Where semantic extraction results are cached. The cache is not committed. |
+| `BANKGPT_VECTOR_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Embedding model for vector retrieval. Retrieval falls back to BM25 if it cannot load. |
+| `BANKGPT_RERANK_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Cross-encoder used to rerank retrieved evidence. |
+| `BANKGPT_REPORT_VERSION_CHANGES` | `1` | `0` leaves dated version changes of one fact out of `conflicts()`; see Conflict reporting. |
+| `BANKGPT_VERBOSE_INGEST` | `0` | `1` prints every extracted or skipped candidate and committed fact during ingestion. Progress summaries are always printed. |
+
 ## Install and run
 
 Use Python 3.11, as in the assignment environment. From the repository root:

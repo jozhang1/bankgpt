@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import patch
 
-from ...solution import Knowledge, Conflict, Source, Snapshot
-from ...retrieval.answer_selector import AnswerSelection
+from solution import Knowledge, Conflict, Source, Snapshot
+from retrieval.answer_selector import AnswerSelection
 from contract import Page
 
 
@@ -28,7 +28,6 @@ class KnowledgeIntegrationTests(unittest.TestCase):
                 knowledge._render_fact_route(selection, 'Unpublished loan rate?', None).text,
             )
             render.assert_not_called()
-
 
     def test_answer_failure_returns_an_unconfident_answer_instead_of_raising(self):
         knowledge = Knowledge()
